@@ -3,3 +3,6 @@ pdfplumber
 sentence-transformers
 scikit-learn
 torch
+tqdm
+python-dotenv
+requests
