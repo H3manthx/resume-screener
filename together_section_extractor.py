@@ -8,6 +8,7 @@ load_dotenv()
 TOGETHER_API_KEY = os.getenv("API_KEY")
 TOGETHER_URL = "https://api.together.xyz/v1/chat/completions"
 
+# Prompt template used to ask the model to extract data from the resume
 PROMPT_TEMPLATE = """
 You are a resume parser. Extract the following fields from the resume below and return valid JSON:
 - objective
@@ -23,6 +24,7 @@ Resume:
 {resume_text}
 """
 
+# Read all the text from a PDF file
 def extract_resume_text(pdf_path):
     text = ""
     with pdfplumber.open(pdf_path) as pdf:
@@ -32,6 +34,7 @@ def extract_resume_text(pdf_path):
                 text += page_text + "\n"
     return text.strip()
 
+# Send prompt to Together AI and return structured JSON
 def query_together(prompt, model="mistralai/Mistral-7B-Instruct-v0.1"):
     headers = {
         "Authorization": f"Bearer {TOGETHER_API_KEY}",
@@ -48,7 +51,7 @@ def query_together(prompt, model="mistralai/Mistral-7B-Instruct-v0.1"):
     }
     res = requests.post(TOGETHER_URL, headers=headers, json=body)
     if res.status_code != 200:
-        print("❌ Error:", res.status_code, res.text)
+        print("Error:", res.status_code, res.text)
         return {}
 
     raw = res.json()["choices"][0]["message"]["content"]
@@ -56,5 +59,5 @@ def query_together(prompt, model="mistralai/Mistral-7B-Instruct-v0.1"):
         json_start = raw.find("{")
         return json.loads(raw[json_start:])
     except Exception as e:
-        print("❌ Parsing error:", e)
+        print("Parsing error:", e)
         return {}
