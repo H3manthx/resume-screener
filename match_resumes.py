@@ -1,41 +1,87 @@
-from sentence_transformers import SentenceTransformer, util
 import os
-import pdfplumber
+import json
+import numpy as np
+from tqdm import tqdm
+from sentence_transformers import SentenceTransformer, util
+from dotenv import load_dotenv
+from together_section_extractor import extract_resume_text, query_together, PROMPT_TEMPLATE
 
-# --- Step 1: Load model ---
+load_dotenv()
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# --- Step 2: Load job description ---
-job_description = """
-We are looking for a Data Scientist with strong Python skills, experience in machine learning, and familiarity with data analysis libraries like pandas and scikit-learn. Experience with SQL and data visualization tools is a plus.
-"""
+def get_resume_embedding(resume_path):
+    try:
+        text = extract_resume_text(resume_path)
+        prompt = PROMPT_TEMPLATE.format(resume_text=text[:3000])
+        parsed = query_together(prompt)
 
-job_embedding = model.encode(job_description, convert_to_tensor=True)
+        combined = f"Skills: {'; '.join(parsed['skills']) if isinstance(parsed['skills'], list) else parsed['skills']}\n"
+        combined += f"Experience: {parsed['experience']}"
 
-# --- Step 3: Load and encode resumes ---
-def extract_text_from_pdf(pdf_path):
-    text = ""
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text
+        return model.encode(combined, convert_to_tensor=True), parsed
+    except Exception as e:
+        print(f"❌ Error processing {resume_path}: {e}")
+        return None, {}
 
-def embed_resumes(resume_folder):
+def rank_resumes(resume_folder, job_description_path):
+    with open(job_description_path, "r", encoding="utf-8") as f:
+        job_text = f.read()
+
+    job_embedding = model.encode(job_text, convert_to_tensor=True)
     scores = []
-    for filename in os.listdir(resume_folder):
-        if filename.endswith(".pdf"):
-            path = os.path.join(resume_folder, filename)
-            text = extract_text_from_pdf(path)
-            embedding = model.encode(text, convert_to_tensor=True)
-            similarity = util.pytorch_cos_sim(job_embedding, embedding).item()
-            scores.append((filename, similarity))
-    return sorted(scores, key=lambda x: x[1], reverse=True)
+    parsed_outputs = {}
 
-# --- Step 4: Run and display rankings ---
+    for filename in tqdm(os.listdir(resume_folder)):
+        if not filename.lower().endswith(".pdf"):
+            continue
+
+        path = os.path.join(resume_folder, filename)
+        emb, parsed = get_resume_embedding(path)
+        if emb is None:
+            continue
+
+        similarity = util.cos_sim(job_embedding, emb).item()
+        scores.append((filename, similarity))
+        parsed_outputs[filename] = parsed
+
+    ranked = sorted(scores, key=lambda x: x[1], reverse=True)
+
+    print("\n📊 Resume Ranking:")
+    for file, score in ranked:
+        print(f"{file} — Score: {round(score, 4)}")
+
+    return ranked, parsed_outputs
+
+def rank_resumes_from_text(resume_folder, job_description_text):
+    job_embedding = model.encode(job_description_text, convert_to_tensor=True)
+    scores = []
+    parsed_outputs = {}
+
+    for filename in tqdm(os.listdir(resume_folder)):
+        if not filename.lower().endswith(".pdf"):
+            continue
+
+        path = os.path.join(resume_folder, filename)
+        emb, parsed = get_resume_embedding(path)
+        if emb is None:
+            continue
+
+        similarity = util.cos_sim(job_embedding, emb).item()
+        scores.append((filename, similarity))
+        parsed_outputs[filename] = parsed
+
+    ranked = sorted(scores, key=lambda x: x[1], reverse=True)
+
+    print("\n📊 Resume Ranking:")
+    for file, score in ranked:
+        print(f"{file} — Score: {round(score, 4)}")
+
+    return ranked, parsed_outputs
+
 if __name__ == "__main__":
-    results = embed_resumes("resumes")
-    print("\n📊 Resume Match Ranking:\n")
-    for i, (name, score) in enumerate(results, 1):
-        print(f"{i}. {name} — Score: {score:.4f}")
+    resumes_folder = "resumes"
+    jd_path = "job_description.txt"
+    ranked, extracted = rank_resumes(resumes_folder, jd_path)
+
+    with open("ranked_results.json", "w") as f:
+        json.dump({"ranked": ranked, "parsed_resumes": extracted}, f, indent=2)

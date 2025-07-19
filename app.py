@@ -1,60 +1,52 @@
 import streamlit as st
-import pdfplumber
-from sentence_transformers import SentenceTransformer, util
-import tempfile
 import os
+import shutil
+from match_resumes import rank_resumes_from_text
 
-# --- Load model ---
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+st.set_page_config(page_title="AI Resume Screener", layout="wide")
+st.title("📄 AI Resume Screener with Together.ai")
 
-model = load_model()
+# === Upload Section ===
+st.header("Paste Job Description & Upload Resumes")
+job_text = st.text_area("📌 Paste Job Description Here", height=200)
+resume_files = st.file_uploader("📎 Upload Resumes (PDFs only)", type="pdf", accept_multiple_files=True)
 
-# --- Helper: Extract text from PDF ---
-def extract_text_from_pdf(pdf_file):
-    text = ""
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text
+if job_text.strip() and resume_files:
+    os.makedirs("resumes", exist_ok=True)
 
-# --- UI ---
-st.title("📄 AI Resume Screener")
-st.markdown("Paste a job description and upload resumes to rank candidates.")
+    for file in resume_files:
+        with open(os.path.join("resumes", file.name), "wb") as f:
+            f.write(file.read())
 
-job_desc = st.text_area("📝 Job Description", height=200)
+    st.success("✅ Files uploaded successfully.")
 
-uploaded_files = st.file_uploader("📤 Upload Resumes (PDF only)", type=["pdf"], accept_multiple_files=True)
+    if st.button("🚀 Run Resume Matcher"):
+        with st.spinner("Processing resumes with Together.ai..."):
+            ranked, extracted = rank_resumes_from_text("resumes", job_text)
 
-if st.button("🔍 Match Resumes"):
-    if not job_desc or not uploaded_files:
-        st.warning("Please provide both a job description and at least one resume.")
-    else:
-        with st.spinner("Analyzing..."):
-            job_embedding = model.encode(job_desc, convert_to_tensor=True)
-            results = []
+        st.header("📊 Match Results")
+        for filename, score in ranked:
+            st.subheader(f"📄 {filename} — Score: {round(score, 4)}")
+            resume_data = extracted.get(filename, {})
+            st.markdown("**🎯 Objective:**")
+            st.write(resume_data.get("objective", ""))
 
-            for file in uploaded_files:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(file.read())
-                    tmp_path = tmp.name
+            st.markdown("**🛠 Skills:**")
+            skills = resume_data.get("skills", [])
+            st.write(", ".join(skills) if isinstance(skills, list) else skills)
 
-                try:
-                    resume_text = extract_text_from_pdf(tmp_path)
-                    resume_embedding = model.encode(resume_text, convert_to_tensor=True)
-                    score = util.pytorch_cos_sim(job_embedding, resume_embedding).item()
-                    results.append((file.name, score))
-                except Exception as e:
-                    st.error(f"Error processing {file.name}: {e}")
-                finally:
-                    os.remove(tmp_path)
+            st.markdown("**💼 Experience:**")
+            st.write(resume_data.get("experience", ""))
 
-            results.sort(key=lambda x: x[1], reverse=True)
+            st.markdown("**🎓 Education:**")
+            st.write(resume_data.get("education", ""))
 
-        # --- Show results ---
-        st.subheader("📊 Resume Match Results")
-        for rank, (name, score) in enumerate(results, 1):
-            st.write(f"{rank}. **{name}** — Match Score: `{score:.4f}`")
+            st.markdown("**📂 Projects:**")
+            st.write(resume_data.get("projects", ""))
+
+    # Optional cleanup UI
+    if st.button("🧹 Clear Uploaded Files"):
+        shutil.rmtree("resumes", ignore_errors=True)
+        st.success("Cleaned up uploaded resumes.")
+else:
+    st.info("Paste a job description and upload one or more resumes to begin.")
